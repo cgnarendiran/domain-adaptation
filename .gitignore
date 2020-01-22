@@ -16,3 +16,6 @@
 # Ignore the run files:
 *.surfsara.nl
 
+# Ignore the slurm out files:
+*.out
+
