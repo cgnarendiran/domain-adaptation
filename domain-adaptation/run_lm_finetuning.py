@@ -34,6 +34,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
+from keras.preprocessing.sequence import pad_sequences
+
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -92,7 +94,7 @@ class TextDataset(Dataset):
 
 
             # Load the dataset into a pandas dataframe.
-            with open(file_path, encoding="utf-8") as f:
+            with open(file_path) as f:
                 df = pd.read_csv(file_path, delimiter='\t')
 
             # Report the number of sentences.
@@ -118,12 +120,16 @@ class TextDataset(Dataset):
                                     # This function also supports truncation and conversion
                                     # to pytorch tensors, but we need to do padding, so we
                                     # can't use these features :( .
-                                    # max_length = 512,          # Truncate all sentences.
-                                    return_tensors = 'pt',     # Return pytorch tensors.
+                                    # max_length = block_size,          # Truncate all sentences.
+                                    # return_tensors = 'pt',     # Return pytorch tensors.
                                )
-            # Add the encoded sentence to the list.
-            self.examples.append(encoded_sent)
+                # print(encoded_sent)
+                # Add the encoded sentence to the list.
+                self.examples.append(encoded_sent)
 
+            # Pad the sentences:
+            self.examples = pad_sequences(self.examples, maxlen=block_size, dtype="long", value=0, truncating="post", padding="post")
+            
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:
                 pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
