@@ -29,7 +29,7 @@ import pickle
 import random
 import re
 import shutil
-
+import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
@@ -121,7 +121,6 @@ class TextDataset(Dataset):
                                     # max_length = 512,          # Truncate all sentences.
                                     return_tensors = 'pt',     # Return pytorch tensors.
                                )
-                
             # Add the encoded sentence to the list.
             self.examples.append(encoded_sent)
 
