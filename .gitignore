@@ -12,3 +12,7 @@
 
 # Ignore csv files too, create new ones if necessary
 *.csv
+
+# Ignore the run files:
+*.surfsara.nl
+
