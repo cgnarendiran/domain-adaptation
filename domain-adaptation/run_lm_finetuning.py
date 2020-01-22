@@ -113,22 +113,26 @@ class TextDataset(Dataset):
                 #   (2) Prepend the `[CLS]` token to the start.
                 #   (3) Append the `[SEP]` token to the end.
                 #   (4) Map tokens to their IDs.
-                encoded_sent = tokenizer.encode(
-                                    sent,                      # Sentence to encode.
-                                    add_special_tokens = True, # Add '[CLS]' and '[SEP]'
+                # encoded_sent = tokenizer.encode(
+                #                     sent,                      # Sentence to encode.
+                #                     add_special_tokens = True, # Add '[CLS]' and '[SEP]'
 
-                                    # This function also supports truncation and conversion
-                                    # to pytorch tensors, but we need to do padding, so we
-                                    # can't use these features :( .
-                                    # max_length = block_size,          # Truncate all sentences.
-                                    # return_tensors = 'pt',     # Return pytorch tensors.
-                               )
+                #                     # This function also supports truncation and conversion
+                #                     # to pytorch tensors, but we need to do padding, so we
+                #                     # can't use these features :( .
+                #                     max_length = block_size,          # Truncate all sentences.
+                #                     # return_tensors = 'pt',     # Return pytorch tensors.
+                #                )
+                encoded_sent = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sent)[:block_size])
+                encoded_sent = tokenizer.build_inputs_with_special_tokens(encoded_sent)
                 # print(encoded_sent)
                 # Add the encoded sentence to the list.
                 self.examples.append(encoded_sent)
 
+            print(self.examples[0])
             # Pad the sentences:
-            self.examples = pad_sequences(self.examples, maxlen=block_size, dtype="long", value=0, truncating="post", padding="post")
+            self.examples = pad_sequences(self.examples, maxlen=512, truncating="post", dtype="long", value=0, padding="post")
+            print(self.examples[0])
             
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:
