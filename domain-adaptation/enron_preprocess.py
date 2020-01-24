@@ -26,10 +26,11 @@ def parse_doc(doc):
     # Remove entries that have less than 10 length and truncate the maximum length of emails to 127
     body_value = doc[doc.find('\n\n'):].strip().strip('\n').strip('\n\n')  # stripping white spaces and new line chars 
     body_length = len(body_value)
-    if  body_length < 100:
-    	return None
-    elif body_length >= 512:
-    	body_value = body_value[0:512]
+    # uncomment this block to save with a threshold of body length
+    # if  body_length < 100:
+    # 	return None
+    # elif body_length >= 512:
+    # 	body_value = body_value[0:512]
 
     # create dict of fields with values including the Body field
     d = dict(zip(keys+['Body'],values+[body_value]))
@@ -106,7 +107,10 @@ if __name__== "__main__" :
 	# open('../data/enron/enron_lm.txt', "w").write(''.join(df))
 
 	# save the parsed dataframe to a file for training
-	parsed_df.to_csv('enron_lm.txt',sep='\t')
+	# parsed_df.to_csv('enron_lm.csv',sep='\t')
+
+	# save a txt file when threholding of the body is NOT done:
+	parsed_df.to_csv('enron_lm.txt', sep='\t', index=False, header=False)
 	##################################################
 	# Checking the maximum body length of the emails:#
 	##################################################
