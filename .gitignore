@@ -19,3 +19,5 @@
 # Ignore the slurm out files:
 *.out
 
+# Ignore the run files:
+*runs/*
