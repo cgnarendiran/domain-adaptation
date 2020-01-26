@@ -32,7 +32,7 @@ import shutil
 import pandas as pd
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
+from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from keras.preprocessing.sequence import pad_sequences
 
@@ -64,6 +64,33 @@ MODEL_CLASSES = {
     'distilbert': (DistilBertConfig, DistilBertForMaskedLM, DistilBertTokenizer),
     'camembert': (CamembertConfig, CamembertForMaskedLM, CamembertTokenizer)
 }
+
+def get_special_tokens_mask_modified(self, token_ids_0, token_ids_1=None, already_has_special_tokens=False):
+    """
+    Retrieves sequence ids from a token list that has no special tokens added. This method is called when adding
+    special tokens using the tokenizer ``prepare_for_model`` or ``encode_plus`` methods.
+    Args:
+        token_ids_0: list of ids (must not contain special tokens)
+        token_ids_1: Optional list of ids (must not contain special tokens), necessary when fetching sequence ids
+            for sequence pairs
+        already_has_special_tokens: (default False) Set to True if the token list is already formated with
+            special tokens for the model
+    Returns:
+        A list of integers in the range [0, 1]: 1 for a special token, 0 for a sequence token.
+    """
+
+    if already_has_special_tokens:
+        if token_ids_1 is not None:
+            raise ValueError(
+                "You should not supply a second sequence if the provided sequence of "
+                "ids is already formated with special tokens for the model."
+            )
+        return list(map(lambda x: 1 if x in [self.sep_token_id, self.cls_token_id, self.pad_token_id] else 0, token_ids_0))
+
+    if token_ids_1 is not None:
+        return [1] + ([0] * len(token_ids_0)) + [1] + ([0] * len(token_ids_1)) + [1]
+    return [1] + ([0] * len(token_ids_0)) + [1]
+
 
 
 class TextDataset(Dataset):
@@ -127,30 +154,44 @@ class TextDataset(Dataset):
                 encoded_sent = tokenizer.build_inputs_with_special_tokens(encoded_sent)
                 # print(encoded_sent)
                 # Add the encoded sentence to the list.
+                
                 self.examples.append(encoded_sent)
 
 
             print('\nPadding token: "{:}", ID: {:}'.format(tokenizer.pad_token, tokenizer.pad_token_id))
 
-            print(self.examples[0])
+            # print(self.examples[0])
             # Pad the sentences:
             self.examples = pad_sequences(self.examples, maxlen=512, truncating="post", dtype="long", value=0, padding="post")
             print(self.examples[0])
             
+            self.examples = torch.LongTensor(self.examples)
+            # Create attention masks
+            self.attention_masks = []
+
+            # Create a mask of 1s for each token followed by 0s for padding
+            for seq in self.examples:
+                seq_mask = [int(i>0) for i in seq]
+                self.attention_masks.append(seq_mask)
+            self.attention_masks = torch.LongTensor(self.attention_masks)
+
+            print(self.examples.dtype)
+            print(self.attention_masks.dtype)
+
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:
-                pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump((self.examples, self.attention_masks), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __len__(self):
         return len(self.examples)
 
-    def __getitem__(self, item):
+    def __getitem__(self, item):    
         return torch.tensor(self.examples[item])
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
     dataset = TextDataset(tokenizer, args, file_path=args.eval_data_file if evaluate else args.train_data_file, block_size=args.block_size)
-    return dataset
+    return TensorDataset(dataset[0], dataset[1])
 
 
 def set_seed(args):
@@ -193,24 +234,31 @@ def _rotate_checkpoints(args, checkpoint_prefix, use_mtime=False):
 def mask_tokens(inputs, tokenizer, args):
     """ Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original. """
     labels = inputs.clone()
-    print(labels.shape)
+    # print(labels.shape)
+    # print(labels[1])
     # We sample a few tokens in each sequence for masked-LM training (with probability args.mlm_probability defaults to 0.15 in Bert/RoBERTa)
     probability_matrix = torch.full(labels.shape, args.mlm_probability)
-    print(probability_matrix)
+    # print(probability_matrix[1])
     
     special_tokens_mask = [tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()]
+    # print(special_tokens_mask[1])
     probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
+    # print(probability_matrix[1])
     masked_indices = torch.bernoulli(probability_matrix).bool()
+    # print(masked_indices[1])
     labels[~masked_indices] = -100  # We only compute loss on masked tokens
+    # print(labels[1])
 
     # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
     indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
     inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
+    # print(inputs[1])
 
     # 10% of the time, we replace masked input tokens with random word
     indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
     random_words = torch.randint(len(tokenizer), labels.shape, dtype=torch.long)
     inputs[indices_random] = random_words[indices_random]
+    # print(inputs[1])
 
     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
     return inputs, labels
@@ -304,14 +352,19 @@ def train(args, train_dataset, model, tokenizer):
             if steps_trained_in_current_epoch > 0:
                 steps_trained_in_current_epoch -= 1
                 continue
-
-            inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
+            batch_inputs, attentions = batch
+            # print(batch_inputs.shape)
+            # print(batch_inputs.dtype)
+            # print(batch_inputs)
+            # print(attentions)
+            inputs, labels = mask_tokens(batch_inputs, tokenizer, args) if args.mlm else (batch, batch)
             # debugging:
-            break
+            # break
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
+            attentions = attentions.to(args.device)
             model.train()
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+            outputs = model(inputs, attention_mask=attentions, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if args.n_gpu > 1:
@@ -572,6 +625,8 @@ def main():
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
+    # Modyfying to tokenizer to yield coorect mask including the paddings:
+    tokenizer.get_special_tokens_mask = get_special_tokens_mask_modified.__get__(tokenizer, BertTokenizer)
     if args.block_size <= 0:
         args.block_size = tokenizer.max_len_single_sentence  # Our input block size will be the max possible for the model
     args.block_size = min(args.block_size, tokenizer.max_len_single_sentence)

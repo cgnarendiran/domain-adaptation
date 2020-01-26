@@ -65,6 +65,7 @@ if __name__== "__main__" :
 		print("sampling chunk: \t", i)
 		if i==10: mylist.append(chunk)
 		else: mylist.append(chunk.sample(1000))
+		break
 	# creating a dataframe for easy access:
 	df = pd.concat(mylist, axis= 0)
 	del mylist
@@ -104,13 +105,13 @@ if __name__== "__main__" :
 	parsed_df = pd.DataFrame(parsed_list)
 	pp.pprint(parsed_df.head())
 	# adding new lines as delimiters between examples and storing them as text files
-	# open('../data/enron/enron_lm.txt', "w").write(''.join(df))
+	# open('../data/enron/enron_lm.txt', "w").write(''.join(parsed_df.Body.values))
 
 	# save the parsed dataframe to a file for training
-	# parsed_df.to_csv('enron_lm.csv',sep='\t')
+	parsed_df.to_csv('enron_lm.tsv',sep='\t')
 
 	# save a txt file when threholding of the body is NOT done:
-	parsed_df.to_csv('enron_lm.txt', sep='\t', index=False, header=False)
+	# parsed_df.to_csv('enron_lm.txt', sep='\t', index=False, header=False)
 	##################################################
 	# Checking the maximum body length of the emails:#
 	##################################################
