@@ -61,11 +61,10 @@ if __name__== "__main__" :
 	print("Pre-processing Enron emails and storing about 10K of them: \n")
 	mylist = []
 	# emails.csv contains 517490 emails
-	for i, chunk in  enumerate(pd.read_csv('../data/enron/emails.csv', chunksize=51740)):
+	for i, chunk in  enumerate(pd.read_csv('../data/emails.csv', chunksize=51740)):
 		print("sampling chunk: \t", i)
-		if i==10: mylist.append(chunk)
+		if i==10: break
 		else: mylist.append(chunk.sample(1000))
-		break
 	# creating a dataframe for easy access:
 	df = pd.concat(mylist, axis= 0)
 	del mylist
