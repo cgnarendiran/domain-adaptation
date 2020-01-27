@@ -178,15 +178,17 @@ class TextDataset(Dataset):
             print(self.examples.dtype)
             print(self.attention_masks.dtype)
 
+            self.examples = (self.examples, self.attention_masks)
+
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, 'wb') as handle:
-                pickle.dump((self.examples, self.attention_masks), handle, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(self.complete_inputs, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, item):    
-        return torch.tensor(self.examples[item])
+        return self.examples[item]
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
@@ -355,11 +357,11 @@ def train(args, train_dataset, model, tokenizer):
             batch_inputs, attentions = batch
             # print(batch_inputs.shape)
             # print(batch_inputs.dtype)
-            # print(batch_inputs)
-            # print(attentions)
+            print(batch_inputs)
+            print(attentions)
             inputs, labels = mask_tokens(batch_inputs, tokenizer, args) if args.mlm else (batch, batch)
             # debugging:
-            # break
+            break
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
             attentions = attentions.to(args.device)
