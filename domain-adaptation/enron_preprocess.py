@@ -60,14 +60,19 @@ if __name__== "__main__" :
 	#####################################################
 	print("Pre-processing Enron emails and storing about 10K of them: \n")
 	mylist = []
+	mylist_eval = []
 	# emails.csv contains 517490 emails
 	for i, chunk in  enumerate(pd.read_csv('../data/emails.csv', chunksize=51740)):
 		print("sampling chunk: \t", i)
 		if i==10: break
-		else: mylist.append(chunk.sample(1000))
+		else: 
+			mylist.append(chunk.sample(1000))
+			mylist_eval.append(chunk.sample(10))
 	# creating a dataframe for easy access:
 	df = pd.concat(mylist, axis= 0)
+	df_eval = pd.concat(mylist_eval, axis=0)
 	del mylist
+	del mylist_eval
 
 	# print(df.head())
 	# Looks like this:
@@ -104,11 +109,28 @@ if __name__== "__main__" :
 	parsed_df = pd.DataFrame(parsed_list)
 	pp.pprint(parsed_df.head())
 	# adding new lines as delimiters between examples and storing them as text files
-	# open('../data/enron/enron_lm.txt', "w").write(''.join(parsed_df.Body.values))
+	open('enron_lm.txt', "w").write(''.join(parsed_df.Body.values))
 
 	# save the parsed dataframe to a file for training
-	parsed_df.to_csv('enron_lm.tsv',sep='\t')
+	# parsed_df.to_csv('enron_lm.tsv',sep='\t')
 
+
+
+	####################################################
+	# Same for creating an eval txt file:
+	parsed_list = []
+	for doc in df_eval.message:
+		parsed_doc = parse_doc(doc)
+		if parsed_doc is not None: # checking whether it's None coz of minimal length threshold of 100
+			parsed_list.append(parsed_doc)
+
+	parsed_df_eval = pd.DataFrame(parsed_list)
+	# pp.pprint(parsed_df.head())
+	# adding new lines as delimiters between examples and storing them as text files
+	open('enron_lm_eval.txt', "w").write(''.join(parsed_df_eval.Body.values))
+
+	# save the parsed dataframe to a file for training
+	# parsed_df.to_csv('enron_lm.tsv',sep='\t')
 	# save a txt file when threholding of the body is NOT done:
 	# parsed_df.to_csv('enron_lm.txt', sep='\t', index=False, header=False)
 	##################################################
