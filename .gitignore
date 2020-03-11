@@ -10,8 +10,11 @@
 #Lock files from Libre office
 *~lock.*
 
-# Ignore csv files too, create new ones if necessary
+# Ignore csv, tsv, txt files too, create new ones if necessary
 *.csv
+*.tsv
+*.txt
+
 
 # Ignore the run files:
 *.surfsara.nl
@@ -21,3 +24,11 @@
 
 # Ignore the run files:
 *runs/*
+
+# Ignore data repo:
+data/*
+
+# Ignore output files:
+*.bin
+*.json
+*.sh
