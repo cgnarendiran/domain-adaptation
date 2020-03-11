@@ -86,6 +86,9 @@ MODEL_CLASSES = {
 class TextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
+
+        block_size = block_size - (tokenizer.max_len - tokenizer.max_len_single_sentence)
+
         directory, filename = os.path.split(file_path)
         cached_features_file = os.path.join(
             directory, args.model_type + "_cached_lm_" + str(block_size) + "_" + filename
@@ -118,7 +121,7 @@ class TextDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, item):
-        return torch.tensor(self.examples[item])
+        return torch.tensor(self.examples[item], dtype=torch.long)
 
 
 class LineByLineTextDataset(Dataset):
@@ -130,15 +133,15 @@ class LineByLineTextDataset(Dataset):
         logger.info("Creating features from dataset file at %s", file_path)
 
         with open(file_path, encoding="utf-8") as f:
-            lines = [line for line in f.read().splitlines() if len(line) > 0]
+            lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
-        self.examples = tokenizer.batch_encode_plus(lines, max_length=block_size)["input_ids"]
+        self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, i):
-        return torch.tensor(self.examples[i])
+        return torch.tensor(self.examples[i], dtype=torch.long)
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
@@ -195,6 +198,12 @@ def _rotate_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False) -
 
 def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> Tuple[torch.Tensor, torch.Tensor]:
     """ Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original. """
+
+    if tokenizer.mask_token is None:
+        raise ValueError(
+            "This tokenizer does not have a mask token which is necessary for masked language modeling. Remove the --mlm flag if you want to use this tokenizer."
+        )
+
     labels = inputs.clone()
     # We sample a few tokens in each sequence for masked-LM training (with probability args.mlm_probability defaults to 0.15 in Bert/RoBERTa)
     probability_matrix = torch.full(labels.shape, args.mlm_probability)
@@ -202,8 +211,9 @@ def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> T
         tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
     ]
     probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
-    padding_mask = labels.eq(tokenizer.pad_token_id)
-    probability_matrix.masked_fill_(padding_mask, value=0.0)
+    if tokenizer._pad_token is not None:
+        padding_mask = labels.eq(tokenizer.pad_token_id)
+        probability_matrix.masked_fill_(padding_mask, value=0.0)
     masked_indices = torch.bernoulli(probability_matrix).bool()
     labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
@@ -228,6 +238,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
     def collate(examples: List[torch.Tensor]):
+        if tokenizer._pad_token is None:
+            return pad_sequence(examples, batch_first=True)
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -421,6 +433,8 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     # Note that DistributedSampler samples randomly
 
     def collate(examples: List[torch.Tensor]):
+        if tokenizer._pad_token is None:
+            return pad_sequence(examples, batch_first=True)
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
     eval_sampler = SequentialSampler(eval_dataset)
@@ -429,8 +443,8 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     )
 
     # multi-gpu evaluate
-    # if args.n_gpu > 1:
-    #     model = torch.nn.DataParallel(model)
+    if args.n_gpu > 1:
+        model = torch.nn.DataParallel(model)
 
     # Eval!
     logger.info("***** Running evaluation {} *****".format(prefix))
@@ -569,8 +583,8 @@ def main():
     )
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
 
-    parser.add_argument("--logging_steps", type=int, default=50, help="Log every X updates steps.")
-    parser.add_argument("--save_steps", type=int, default=50, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--save_total_limit",
         type=int,
@@ -649,7 +663,7 @@ def main():
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = torch.cuda.device_count()
+        args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
@@ -699,10 +713,10 @@ def main():
         )
 
     if args.block_size <= 0:
-        args.block_size = tokenizer.max_len_single_sentence
+        args.block_size = tokenizer.max_len
         # Our input block size will be the max possible for the model
     else:
-        args.block_size = min(args.block_size, tokenizer.max_len_single_sentence)
+        args.block_size = min(args.block_size, tokenizer.max_len)
 
     if args.model_name_or_path:
         model = model_class.from_pretrained(

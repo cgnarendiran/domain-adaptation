@@ -88,6 +88,13 @@ def set_seed(args):
 
 def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
+    # freeze the bert layers to preseve pre-trained embeddings:
+    # model.module.bert.weight.requires_grad_(False)
+    # model.module.bert.bias.requires_grad_(False)
+    for name, param in model.bert.named_parameters():                
+        if name.startswith('embeddings') or name.startswith('encoding'):
+            param.requires_grad = False
+
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
@@ -189,6 +196,7 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                 continue
 
             model.train()
+
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
             if args.model_type != "distilbert":
