@@ -69,6 +69,10 @@ try:
 except ImportError:
     from tensorboardX import SummaryWriter
 
+# Init wandb
+import wandb
+wandb.init(project="domain-adaptation")
+
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +298,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
         )
 
+    # Log metrics with wandb:
+    wandb.watch(model)
     # Train!
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_dataset))
@@ -383,8 +389,11 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                         results = evaluate(args, model, tokenizer)
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+                            wandb.log({key: value})
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
+                    wandb.log({"learning rate": scheduler.get_lr()[0]})
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
+                    wandb.log({"Train loss": (tr_loss - logging_loss) / args.logging_steps})
                     logging_loss = tr_loss
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
