@@ -54,7 +54,7 @@ class Corpus(object):
         with open(os.path.join(path, 'train.txt'), 'r', encoding="utf8") as f:
             train_data = f.read()
             self.train = torch.tensor(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(train_data)))
-        with open(os.path.join(path, 'train.txt'), 'r', encoding="utf8") as f:
+        with open(os.path.join(path, 'valid.txt'), 'r', encoding="utf8") as f:
             valid_data = f.read()
             self.valid = torch.tensor(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(valid_data)))
 

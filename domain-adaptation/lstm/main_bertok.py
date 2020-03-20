@@ -18,6 +18,7 @@ import shutil
 from typing import Dict, List, Tuple
 import glob
 import numpy as np
+from tqdm import tqdm
 
 
 # Inside my model training code
@@ -106,6 +107,8 @@ def batchify(data, bsz):
 eval_batch_size = 16
 train_data = batchify(corpus.train, args.batch_size)
 val_data = batchify(corpus.valid, eval_batch_size)
+print("\nNumber of examples to train on:", train_data.size(0)*args.batch_size//args.bptt)
+print("\nNumber of validation examples:", val_data.size(0)*eval_batch_size//args.bptt)
 # test_data = batchify(corpus.test, eval_batch_size)
 
 ###############################################################################
@@ -179,7 +182,7 @@ def train():
     # ntokens = len(tokenizer.vocab)
     if args.model != 'Transformer':
         hidden = model.init_hidden(args.batch_size)
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
+    for batch, i in tqdm(enumerate(range(0, train_data.size(0) - 1, args.bptt)), desc="Steps"):
         data, targets = get_batch(train_data, i)
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
@@ -224,9 +227,10 @@ def export_onnx(path, batch_size, seq_len):
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
+
 # At any point you can hit Ctrl + C to break out of training early.
 try:
-    for epoch in range(1, args.epochs+1):
+    for epoch in tqdm(range(1, args.epochs+1), desc="Epochs"):
         epoch_start_time = time.time()
         train()
         val_loss = evaluate(val_data)
