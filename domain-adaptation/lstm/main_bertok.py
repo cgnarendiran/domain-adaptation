@@ -210,7 +210,8 @@ def train():
                 epoch, batch, len(train_data) // args.bptt, lr,
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
             # wandb logging:
-            wandb.log({'epoch': epoch, 'training_loss': cur_loss, "training_perplexity": math.exp(cur_loss), "learning_rate": lr})
+            wandb.log({"learning_rate": lr})
+            wandb.log({'training_loss': cur_loss, "training_perplexity": math.exp(cur_loss)}, step=epoch)
             total_loss = 0
             start_time = time.time()
 
@@ -239,7 +240,7 @@ try:
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss)))
         print('-' * 89)
-        wandb.log({'validation_loss': val_loss, "validation_perplexity": math.exp(val_loss)})
+        wandb.log({'validation_loss': val_loss, "validation_perplexity": math.exp(val_loss)}, step=epoch)
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
             with open(args.save, 'wb') as f:
