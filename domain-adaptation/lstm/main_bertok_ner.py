@@ -346,9 +346,8 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
             #     )  # XLM and RoBERTa don"t use segment_ids
             inputs["token_type_ids"] = None
 
-            outputs = model(**inputs)
+            outputs, hidden = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
-            hidden = outputs[2]
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -507,7 +506,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
 
 # Prepare CONLL-2003 task
 labels = get_labels('')
-num_labels = len(labels)
+nlabels = len(labels)
 # Use cross entropy ignore index as padding label id so that only real label ids contribute to the loss later
 pad_token_label_id = nn.CrossEntropyLoss().ignore_index
 
@@ -531,7 +530,6 @@ train_dataset = load_and_cache_examples(args, tokenizer, labels, pad_token_label
 ###############################################################################
 
 ntokens = len(tokenizer.vocab)
-nlabels = 7
 if args.model == 'Transformer':
     model = model_ner.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(args.device)
 else:

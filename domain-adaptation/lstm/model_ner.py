@@ -61,17 +61,19 @@ class RNNModel(nn.Module):
         output = self.drop(output)
         decoded = self.softmax(self.decoder(output))
         # loss calc:
-        # print(output.view(-1, self.nlabels)[0])
-        print(decoded.view(-1, self.nlabels).size(), labels.view(-1).size())
+        # print(decoded.size())
+        # print(decoded[0].size())
+        # print(labels[0])
+        # print(decoded.view(-1, self.nlabels).size(), labels.view(-1).size())
         # loss = self.criterion(decoded.view(-1, self.nlabels), labels.view(-1))
         if attention_mask is not None:
             active_loss = attention_mask.view(-1) == 1
             active_logits = decoded.view(-1, self.nlabels)
             active_labels = torch.where(active_loss, labels.view(-1), torch.tensor(self.criterion.ignore_index).type_as(labels))
             loss = self.criterion(active_logits, active_labels)
-        outputs = (loss,) + decoded + hidden
+        outputs = (loss,decoded)
 
-        return outputs  # (loss), scores, (hidden_states), (attentions)
+        return outputs, hidden  # (loss), scores, (hidden_states), (attentions)
 
         # return decoded, hidden
 
