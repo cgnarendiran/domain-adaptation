@@ -70,6 +70,8 @@ parser.add_argument('--batch_size', type=int, default=16, metavar='N',
                     help='batch size')
 parser.add_argument('--bptt', type=int, default=512,
                     help='sequence length')
+parser.add_argument("--eval_batch_size", default=8, type=int, 
+                    help="Batch size per GPU/CPU for evaluation.")
 parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--tied', action='store_true',
@@ -84,7 +86,11 @@ parser.add_argument('--save', type=str, default='model.pt',
                     help='path to save the final model')
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
-
+parser.add_argument(
+        "--output_dir",
+        default='output/',
+        type=str,
+        help="The output directory where the model predictions and checkpoints will be written.")
 parser.add_argument('--nhead', type=int, default=2,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument("--local_rank", type=int, default=-1, 
@@ -423,7 +429,7 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
 def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""):
     eval_dataset = load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode=mode)
 
-    args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+    # args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     # Note that DistributedSampler samples randomly
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
@@ -441,16 +447,19 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
     preds = None
     out_label_ids = None
     model.eval()
+    hidden = model.init_hidden(args.eval_batch_size)
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         batch = tuple(t.to(args.device) for t in batch)
 
         with torch.no_grad():
-            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
-            if args.model_type != "distilbert":
-                inputs["token_type_ids"] = (
-                    batch[2] if args.model_type in ["bert", "xlnet"] else None
-                )  # XLM and RoBERTa don"t use segment_ids
-            outputs = model(**inputs)
+            hidden = repackage_hidden(hidden)
+            inputs = {"input_ids": batch[0], "hidden":hidden, "attention_mask": batch[1], "labels": batch[3]}
+            # if args.model_type != "distilbert":
+            #     inputs["token_type_ids"] = (
+            #         batch[2] if args.model_type in ["bert", "xlnet"] else None
+            #     )  # XLM and RoBERTa don"t use segment_ids
+            inputs["token_type_ids"] = batch[2]
+            outputs, hidden = model(**inputs)
             tmp_eval_loss, logits = outputs[:2]
 
             if args.n_gpu > 1:
@@ -718,7 +727,7 @@ if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0
 # Evaluation
 results = {}
 if args.do_eval and args.local_rank in [-1, 0]:
-    tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+    # tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
     checkpoints = [args.output_dir]
     if args.eval_all_checkpoints:
         checkpoints = list(
@@ -728,7 +737,7 @@ if args.do_eval and args.local_rank in [-1, 0]:
     logger.info("Evaluate the following checkpoints: %s", checkpoints)
     for checkpoint in checkpoints:
         global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-        model = model_class.from_pretrained(checkpoint)
+        # model = model_class.from_pretrained(checkpoint)
         model.to(args.device)
         result, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev", prefix=global_step)
         if global_step:
