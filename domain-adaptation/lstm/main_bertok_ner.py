@@ -66,7 +66,7 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
 parser.add_argument('--epochs', type=int, default=40,
                     help='upper epoch limit')
-parser.add_argument('--batch_size', type=int, default=16, metavar='N',
+parser.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='batch size')
 parser.add_argument('--bptt', type=int, default=512,
                     help='sequence length')
@@ -82,8 +82,9 @@ parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 # parser.add_argument('--logging_steps', type=int, default=200, metavar='N',
 #                     help='report interval')
-parser.add_argument('--save', type=str, default='model.pt',
+parser.add_argument('--finetuned_lm_model', type=str, default='model.pt',
                     help='path to save the final model')
+parser.add_argument("--load_pretrained", action="store_true", help="Use a pretrained lm model")
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
 parser.add_argument(
@@ -543,6 +544,25 @@ if args.model == 'Transformer':
     model = model_ner.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(args.device)
 else:
     model = model_ner.RNNModel(args.model, ntokens, nlabels, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(args.device)
+
+
+###############################################################################
+# state dict:
+###############################################################################
+if args.load_pretrained:
+    pretrained_dict = torch.load(args.finetuned_lm_model).state_dict()
+model_dict = model.state_dict()
+
+# print(model_dict.keys())
+# print(pretrained_dict.keys())
+# 1. filter out unnecessary keys
+pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+# 2. overwrite entries in the existing state dict
+model_dict.update(pretrained_dict) 
+
+# 3. load the new state dict
+model.load_state_dict(model_dict)
+
 
 criterion = nn.CrossEntropyLoss()
 

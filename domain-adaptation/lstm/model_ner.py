@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class RNNModel(nn.Module):
-    """Container module with an encoder, a recurrent module, and a decoder."""
+    """Container module with an encoder, a recurrent module, and a classifier."""
 
     def __init__(self, rnn_type, ntoken, nlabels, ninp, nhid, nlayers, dropout=0.5, tie_weights=False):
         super(RNNModel, self).__init__()
@@ -19,7 +19,7 @@ class RNNModel(nn.Module):
                 raise ValueError( """An invalid option for `--model` was supplied,
                                  options are ['LSTM', 'GRU', 'RNN_TANH' or 'RNN_RELU']""")
             self.rnn = nn.RNN(ninp, nhid, nlayers, nonlinearity=nonlinearity, dropout=dropout)
-        self.decoder = nn.Linear(nhid, nlabels)
+        self.classifier = nn.Linear(nhid, nlabels)
         self.softmax = nn.Softmax(dim=-1)
         self.criterion = nn.CrossEntropyLoss()
         # Optionally tie weights as in:
@@ -31,7 +31,7 @@ class RNNModel(nn.Module):
         if tie_weights:
             if nhid != ninp:
                 raise ValueError('When using the tied flag, nhid must be equal to emsize')
-            self.decoder.weight = self.encoder.weight
+            self.classifier.weight = self.encoder.weight
 
         self.init_weights()
 
@@ -43,8 +43,8 @@ class RNNModel(nn.Module):
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-initrange, initrange)
+        self.classifier.bias.data.zero_()
+        self.classifier.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, input_ids=None,
         attention_mask=None,
@@ -59,7 +59,7 @@ class RNNModel(nn.Module):
         emb = self.drop(self.encoder(input_ids))
         output, hidden = self.rnn(emb, hidden)
         output = self.drop(output)
-        decoded = self.softmax(self.decoder(output))
+        decoded = self.softmax(self.classifier(output))
         # loss calc:
         # print(decoded.size())
         # print(decoded[0].size())
@@ -130,7 +130,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class TransformerModel(nn.Module):
-    """Container module with an encoder, a recurrent or transformer module, and a decoder."""
+    """Container module with an encoder, a recurrent or transformer module, and a classifier."""
 
     def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
         super(TransformerModel, self).__init__()
@@ -145,7 +145,7 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
-        self.decoder = nn.Linear(ninp, ntoken)
+        self.classifier = nn.Linear(ninp, ntoken)
 
         self.init_weights()
 
@@ -157,8 +157,8 @@ class TransformerModel(nn.Module):
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-initrange, initrange)
+        self.classifier.bias.data.zero_()
+        self.classifier.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src, has_mask=True):
         if has_mask:
@@ -172,5 +172,5 @@ class TransformerModel(nn.Module):
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
-        output = self.decoder(output)
+        output = self.classifier(output)
         return F.log_softmax(output, dim=-1)
