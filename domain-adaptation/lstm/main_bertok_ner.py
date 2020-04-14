@@ -404,7 +404,8 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                     model_to_save = (
                         model.module if hasattr(model, "module") else model
                     )  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
+                    torch.save(model_to_save.state_dict(), output_dir)
+                    # model_to_save.save_pretrained(output_dir)
                     tokenizer.save_pretrained(output_dir)
 
                     torch.save(args, os.path.join(output_dir, "training_args.bin"))
@@ -551,17 +552,17 @@ else:
 ###############################################################################
 if args.load_pretrained:
     pretrained_dict = torch.load(args.finetuned_lm_model).state_dict()
-model_dict = model.state_dict()
+    model_dict = model.state_dict()
 
-# print(model_dict.keys())
-# print(pretrained_dict.keys())
-# 1. filter out unnecessary keys
-pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-# 2. overwrite entries in the existing state dict
-model_dict.update(pretrained_dict) 
+    # print(model_dict.keys())
+    # print(pretrained_dict.keys())
+    # 1. filter out unnecessary keys
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    # 2. overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict) 
 
-# 3. load the new state dict
-model.load_state_dict(model_dict)
+    # 3. load the new state dict
+    model.load_state_dict(model_dict)
 
 
 criterion = nn.CrossEntropyLoss()
@@ -758,6 +759,7 @@ if args.do_eval and args.local_rank in [-1, 0]:
     for checkpoint in checkpoints:
         global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
         # model = model_class.from_pretrained(checkpoint)
+        model.load_state_dict(torch.load(checkpoint).state_dict())
         model.to(args.device)
         result, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev", prefix=global_step)
         if global_step:
@@ -770,7 +772,8 @@ if args.do_eval and args.local_rank in [-1, 0]:
 
 if args.do_predict and args.local_rank in [-1, 0]:
     tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-    model = model_class.from_pretrained(args.output_dir)
+    # model = model_class.from_pretrained(args.output_dir)
+    model.load_state_dict(torch.load(args.output_dir).state_dict())
     model.to(args.device)
     result, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
     # Save results
