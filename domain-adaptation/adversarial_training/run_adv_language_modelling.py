@@ -29,6 +29,7 @@ import random
 import re
 import shutil
 from typing import Dict, List, Tuple
+import pandas as pd
 
 import numpy as np
 import torch
@@ -84,19 +85,20 @@ class Discriminator(nn.Module):
     """docstring for Discriminator"""
     def __init__(self, config):
         super(Discriminator, self).__init__()
-        self.ndomains = 2
         self.config = config
-        self.inter_hidden_size = 100                            
+        self.inter_hidden_size = 256
+        self.num_domains =  2                
         self.main = nn.Sequential(
             nn.Linear(self.config.hidden_size, self.inter_hidden_size),
-            nn.Linear(self.inter_hidden_size, self.ndomains),
+            nn.Linear(self.inter_hidden_size, self.num_domains-1),
             nn.Sigmoid())
 
-    def forward(pooled_hidden_state):
-        output = self.softmax(self.linear2(self.linear1(pooled_hidden_state)))
+    def forward(self, pooled_hidden_state):
+        output = self.main(pooled_hidden_state)
         return output
 
-        
+
+
 class BertForAdversarialMaskedLM(BertForMaskedLM):
     def __init__(self, config):
         super().__init__(config)
@@ -104,7 +106,6 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
         # self.bert = BertModel(config)
         # self.cls = BertOnlyMLMHead(config)
         self.dis = Discriminator(config)
-
         self.init_weights()
 
     def get_output_embeddings(self):
@@ -123,6 +124,7 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         lm_labels=None,
+        domain_labels=None
     ):
         r"""
         masked_lm_labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
@@ -174,24 +176,24 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
         )
 
         sequence_output = outputs[0]
-        pooled_output = output[1]
+        pooled_output = outputs[1]
+        discriminator_op = self.dis(pooled_output.detach())
 
         prediction_scores = self.cls(sequence_output)
-        discriminator_op = self.dis(pooled_output.detach())
+        outputs = (prediction_scores,discriminator_op,) + outputs[2:]  # Add hidden states and attention if they are here
 
         adv_loss_fct = nn.BCELoss()
 
-        outputs = (prediction_scores,discriminator_op,) + outputs[2:]  # Add hidden states and attention if they are here
-
+        # loss for the discriminator:
         if domain_labels is not None:
-            # los for the discriminator:
+            print(discriminator_op)
+            print(domain_labels)
             dis_loss = adv_loss_fct(discriminator_op.view(-1), domain_labels.view(-1))
             outputs = (dis_loss, ) + outputs
 
+        # loss for the encoder:
         discriminator_op = self.dis(pooled_output)
-
         if domain_labels is not None:
-            # los for the discriminator:
             encoder_loss = - adv_loss_fct(discriminator_op.view(-1), domain_labels.view(-1))
             outputs = (encoder_loss, ) + outputs
 
@@ -202,7 +204,7 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
         # 2. If `lm_labels` is provided we are in a causal scenario where we
         #    try to predict the next token for each input in the decoder.
         if masked_lm_labels is not None:
-            loss_fct = CrossEntropyLoss()  # -100 index = padding token
+            loss_fct = nn.CrossEntropyLoss()  # -100 index = padding token
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), masked_lm_labels.view(-1))
             outputs = (masked_lm_loss,) + outputs
 
@@ -210,7 +212,7 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
             # we are doing next-token prediction; shift prediction scores and input ids by one
             prediction_scores = prediction_scores[:, :-1, :].contiguous()
             lm_labels = lm_labels[:, 1:].contiguous()
-            loss_fct = CrossEntropyLoss()
+            loss_fct = nn.CrossEntropyLoss()
             ltr_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), lm_labels.view(-1))
             outputs = (ltr_lm_loss,) + outputs
 
@@ -286,6 +288,7 @@ class LineByLineTextDataset(Dataset):
             lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
         self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
+        # self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size, pad_to_max_length=True)["input_ids"]
 
     def __len__(self):
         return len(self.examples)
@@ -294,9 +297,51 @@ class LineByLineTextDataset(Dataset):
         return torch.tensor(self.examples[i], dtype=torch.long)
 
 
+class TsvAdvTextDataset(Dataset):
+    def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
+        #split the two filepaths
+        filepaths = file_path.split(',')
+        data = []
+        domain = []
+        self.examples = []
+        for i, file_path in enumerate(filepaths):
+            assert os.path.isfile(file_path)
+            # Here, we do not cache the features, operating under the assumption
+            # that we will soon use fast multithreaded tokenizers from the
+            # `tokenizers` repo everywhere =)
+            logger.info("Creating features from dataset file at %s", file_path)
+
+            with open(file_path, encoding="utf-8") as f:
+                # lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
+                # lines = [line for line in re.split(r'\t+', f.read()) if (len(line) > 0 and not line.isspace())]
+                lines_list = pd.read_csv(f, sep='\t').values.tolist()
+                lines = [i for l in lines_list for i in l]
+            print("\nTotal number of examples in this domain:", len(lines))
+            print("A sample:", lines[0])
+
+            # self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
+            data.append(tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"])
+            # data.append(tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size, pad_to_max_length=True)["input_ids"])
+            domain.append([float(i)]*len(data[i]))
+            self.examples += list(zip(data[i], domain[i]))
+        # print(self.examples[10])
+        # print(self.examples[10000])
+
+
+    def __len__(self):
+        # return len(self.examples)
+        return len(self.examples)
+
+    def __getitem__(self, index):
+        # return torch.tensor(self.examples[index])
+        return tuple(torch.tensor(example) for example in self.examples[index])
+
+
 def load_and_cache_examples(args, tokenizer, evaluate=False):
     file_path = args.eval_data_file if evaluate else args.train_data_file
-    if args.line_by_line:
+    if args.tsv_adv:
+        return TsvAdvTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+    elif args.line_by_line:
         return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
     else:
         return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
@@ -387,15 +432,17 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
-    def collate(examples: List[torch.Tensor]):
+    # def collate(examples: List[(torch.Tensor,torch.Tensor)]):
+    def collate(examples):
         if tokenizer._pad_token is None:
-            return pad_sequence(examples, batch_first=True)
-        return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
+            return (pad_sequence([d[0] for d in examples], batch_first=True), torch.tensor([d[1] for d in examples]))
+        return pad_sequence([d[0] for d in examples], batch_first=True, padding_value=tokenizer.pad_token_id), torch.tensor([d[1] for d in examples])
 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(
-        train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn=collate
-    )
+        train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn=collate)
+    # train_dataloader = DataLoader(
+    #     train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -418,45 +465,12 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
         {"params": [p for n, p in param_gp if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
     ] for k, param_gp in parameter_groups.items()}
 
-    # enc_optimizer_grouped_parameters = [
-    #     {
-    #         "params": [p fo/r n, p in encoder_params if not any(nd in n for nd in no_decay)],
-    #         "weight_decay": args.weight_decay,
-    #     },
-    #     {"params": [p for n, p in encoder_params if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    # ]
-    # dec_optimizer_grouped_parameters = [
-    #     {
-    #         "params": [p for n, p in decoder_params if not any(nd in n for nd in no_decay)],
-    #         "weight_decay": args.weight_decay,
-    #     },
-    #     {"params": [p for n, p in decoder_params if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    # ]
-    # dis_optimizer_grouped_parameters = [
-    #     {
-    #         "params": [p for n, p in discriminator_params if not any(nd in n for nd in no_decay)],
-    #         "weight_decay": args.weight_decay,
-    #     },
-    #     {"params": [p for n, p in discriminator_params if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
-    # ]
 
     optimizers = {k: AdamW(v, lr=args.learning_rate, eps=args.adam_epsilon) for k,v in optimizer_grouped_parameters.items()}
-    # enc_optimizer = AdamW(enc_optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    # dec_optimizer = AdamW(dec_optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    # dis_optimizer = AdamW(dis_optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+
 
     schedulers = {k: get_linear_schedule_with_warmup(
         v, num_warmup_steps=args.warmup_steps, num_training_steps=t_total) for k,v in optimizers.items()}
-
-    # enc_scheduler = get_linear_schedule_with_warmup(
-    #     enc_optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
-    # )
-    # dec_scheduler = get_linear_schedule_with_warmup(
-    #     dec_optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
-    # )
-    # dis_scheduler = get_linear_schedule_with_warmup(
-    #     dis_optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total
-    # )
 
     # Check if saved optimizer or scheduler states exist
     for k, v in parameter_groups.items():
@@ -523,7 +537,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     tr_loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
     logging_loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
-    # loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
+    loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
 
     model_to_resize = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
     model_to_resize.resize_token_embeddings(len(tokenizer))
@@ -542,16 +556,21 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                 steps_trained_in_current_epoch -= 1
                 continue
 
-            inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
+            # uncover domain labels:
+            batch = tuple(t.to(args.device) for t in batch)
+            inputs, labels = mask_tokens(batch[0], tokenizer, args) if args.mlm else (batch[0], batch[0])
+            # inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
             model.train()
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+            # outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+            outputs = model(inputs, masked_lm_labels=labels, domain_labels=batch[1]) if args.mlm else model(inputs, 
+                labels=labels, domain_labels=batch[1])
             # loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
-            loss["mlm"] = output[0]
-            loss["enc"] = output[1]
-            loss["dis"] = output[2]
+            loss["mlm"] = outputs[0]
+            loss["enc"] = outputs[1]
+            loss["dis"] = outputs[2]
             # if args.n_gpu > 1:
             #     loss = loss.mean()  # mean() to average on multi-gpu parallel training
             # if args.gradient_accumulation_steps > 1:
@@ -562,7 +581,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             #         scaled_loss.backward()
             # else:
             #     loss.backward()
-            for k in loss: loss[k].backward()
+            for k in loss: loss[k].backward(retain_graph=True)
 
 
             for k in loss: tr_loss[k] += loss[k]
@@ -718,6 +737,11 @@ def main():
         "--line_by_line",
         action="store_true",
         help="Whether distinct lines of text in the dataset are to be handled as distinct sequences.",
+    )
+    parser.add_argument(
+        "--tsv_adv",
+        action="store_true",
+        help="Tab separated lines of text in the dataset. Also specify two different dataset files separated by a comma.",
     )
     parser.add_argument(
         "--should_continue", action="store_true", help="Whether to continue from latest checkpoint in output_dir"
