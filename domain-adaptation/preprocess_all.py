@@ -6,42 +6,56 @@ import json
 import glob
 import numpy as np
 import random
+from statistics import mean
 
 def parse_doc(doc):
 	# finding the keys in this particular email 
-    keys = ['Message-ID']+re.findall('\n([\w\-]+):', doc[:doc.find('\n\n')])
-    keys = pd.Series(keys).drop_duplicates().tolist()
+	keys = ['Message-ID']+re.findall('\n([\w\-]+):', doc[:doc.find('\n\n')])
+	keys = pd.Series(keys).drop_duplicates().tolist()
 
-    values = []
-    for a, k in enumerate(keys):
-        k = k+':'
-        try:
-        	# append values for all the keys
-            values.append(doc[doc.find(k)+len(k):doc.find(keys[a+1])].strip())
-        except:
-        	# for the last key add values till the start of body which is '\n\n'
-            values.append(doc[doc.find(k)+len(k):doc.find('\n\n')].strip())
+	values = []
+	for a, k in enumerate(keys):
+		k = k+':'
+		try:
+			# append values for all the keys
+			values.append(doc[doc.find(k)+len(k):doc.find(keys[a+1])].strip())
+		except:
+			# for the last key add values till the start of body which is '\n\n'
+			values.append(doc[doc.find(k)+len(k):doc.find('\n\n')].strip())
 
-    # Remove entries that have less than 10 length and truncate the maximum length of emails to 127
-    body_value = doc[doc.find('\n\n'):].strip().strip('\n').strip('\n\n')  # stripping white spaces and new line chars 
-    body_length = len(body_value)
-    # uncomment this block to save with a threshold of body length
-    # if body_length >= 510:
-    # 	body_value = body_value[0:510]
+	# Remove entries that have less than 10 length and truncate the maximum length of emails to 127
+	og_message_pos =  doc.find('-----Original Message-----')
+	fw_message_pos =  doc.find('---------------------- Forwarded by')
+	if og_message_pos != -1:
+		# print("\nog_message_pos:", og_message_pos)
+		body_value = doc[doc.find('\n\n'):og_message_pos].strip() # stripping white spaces and new line chars
+	elif fw_message_pos != -1:
+		# print("\nfw_message_pos:", fw_message_pos)
+		body_value = doc[doc.find('\n\n'):fw_message_pos].strip()
+	else:
+		# print("\nno og or fw pos")
+		body_value = doc[doc.find('\n\n'):].strip()
 
-    # create dict of fields with values including the Body field
-    d = dict(zip(keys+['Body'],values+[body_value]))
+	body_length = len(body_value)
+	############ uncomment this block to save with a threshold of body length
+	if  body_length < 4:
+		return None
+	elif body_length >= 512:
+		body_value = body_value[0:512]
 
-    # add or remove keys from the exhaustive list of allkeys
-    k_to_remove = set(d.keys()) - set(allkeys)
-    k_to_add = set(allkeys) - set(d.keys())
-    
-    for k in k_to_remove:
-        d.pop(k)
-    for k in k_to_add:
-        d[k] = ''
-    # keys = [k[:-1] for k in keys]
-    return return_desired_fields(d, desired_fields)
+	# create dict of fields with values including the Body field
+	d = dict(zip(keys+['Body'],values+[body_value]))
+
+	# add or remove keys from the exhaustive list of allkeys
+	k_to_remove = set(d.keys()) - set(allkeys)
+	k_to_add = set(allkeys) - set(d.keys())
+	
+	for k in k_to_remove:
+		d.pop(k)
+	for k in k_to_add:
+		d[k] = ''
+	# keys = [k[:-1] for k in keys]
+	return return_desired_fields(d, desired_fields)
 
 
 def return_desired_fields(dict_doc, desired_fields):
@@ -72,31 +86,34 @@ if __name__== "__main__" :
 		word = line.split(' ')[0]
 		# print(word)
 		if word == '-DOCSTART-' or word == '\n':
-			if doc: raw_text.append(doc) 
+			if doc: 
+				if len(doc) <4: pass
+				else: raw_text.append(doc) 
 			doc = ''
 		else:
 			doc = doc + ' ' + word
 	raw_text.append(doc)
 	random.shuffle(raw_text)
-	raw_text_train = raw_text[:10000]
-	raw_text_eval = raw_text[10000:10100]
+	raw_text_train = raw_text[:5000]
+	raw_text_eval = raw_text[5000:5100]
 
 	df_conll = pd.DataFrame(raw_text_train, columns=['Body'])
-	r = []
-	for i in range(5000):
-	 	r = r + [i,i]
-	s = pd.Series(r)
-	# print(s.head())
-	df_conll = df_conll.set_index([s])
+	# r = []
+	# for i in range(5000):
+	#  	r = r + [i,i]
+	# s = pd.Series(r)
+	# # print(s.head())
+	# df_conll = df_conll.set_index([s])
 	df_conll_eval = pd.DataFrame(raw_text_eval, columns=['Body'])
 
 	pp.pprint(df_conll.head())
 	news_bodies = df_conll.Body
 	print('Max sentence length: ', max([len(news_body) for news_body in news_bodies]))
+	print('Avg sentence length: ', mean([len(news_body) for news_body in news_bodies]))
 	sorted_news_bodies = sorted(news_bodies, key=len)
 	print("Total examples:", len(sorted_news_bodies))
 	print("A sample news:\n")
-	print(sorted_news_bodies[800][:])
+	print(sorted_news_bodies[-1][:])
 	# with open('conll_lm.txt', 'w') as f:
 	# 	for i, doc in enumerate(raw_text):
 	# 		for word in doc:
@@ -189,8 +206,9 @@ if __name__== "__main__" :
 	##################################################
 	email_bodies = df_enron.Body
 	print('Max sentence length: ', max([len(email_body) for email_body in email_bodies]))
+	print('Avg sentence length: ', mean([len(email_body) for email_body in email_bodies]))
 	sorted_email_bodies = sorted(email_bodies, key=len)
 	print("Total examples:", len(sorted_email_bodies))
 	print("A sample email:\n")
-	print(sorted_email_bodies[800][:])
+	print(sorted_email_bodies[-1][:])
 

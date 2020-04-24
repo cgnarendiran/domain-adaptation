@@ -5,6 +5,7 @@ import os
 import json
 import glob
 import numpy as np
+from statistics import mean
 
 
 
@@ -78,7 +79,7 @@ if __name__== "__main__" :
 		if i==10: break
 		else: 
 			mylist.append(chunk.sample(1000))
-			mylist_eval.append(chunk.sample(10))
+			mylist_eval.append(chunk.sample(20))
 	# creating a dataframe for easy access:
 	df = pd.concat(mylist, axis= 0)
 	df_eval = pd.concat(mylist_eval, axis=0)
@@ -122,15 +123,17 @@ if __name__== "__main__" :
 	########################
 	# check alert!!
 	# open('debug_enron.txt', "w").write('\nNEW EMAIL\n'.join(parsed_df.loc[0:20,:].Body.values))
+	parsed_df_subset = parsed_df.sample(n=200)
+	parsed_df_subset.to_csv('debug_enron.csv', index=False, header=False)
 	######################
 
 
 
 	# adding new lines as delimiters between examples and storing them as text files
-	open('enron_lm.txt', "w").write('\n'.join(parsed_df.Body.values))
+	# open('enron_lm.txt', "w").write('\n'.join(parsed_df.Body.values))
 
 	# save the parsed dataframe to a file for training
-	# parsed_df.to_csv('enron_lm.tsv',sep='\t')
+	parsed_df.to_csv('enron_lm.tsv',sep='\t', index=False, header=False)
 
 
 
@@ -144,13 +147,12 @@ if __name__== "__main__" :
 
 	parsed_df_eval = pd.DataFrame(parsed_list)
 	# pp.pprint(parsed_df.head())
+
 	# adding new lines as delimiters between examples and storing them as text files
-	open('enron_lm_eval.txt', "w").write('\n'.join(parsed_df_eval.Body.values))
+	# open('enron_lm_eval.txt', "w").write('\n'.join(parsed_df_eval.Body.values))
 
 	# save the parsed dataframe to a file for training
-	# parsed_df.to_csv('enron_lm.tsv',sep='\t')
-	# save a txt file when threholding of the body is NOT done:
-	# parsed_df.to_csv('enron_lm.txt', sep='\t', index=False, header=False)
+	parsed_df_eval.to_csv('enron_eval_lm.txt', sep='\t', index=False, header=False)
 	
 
 
@@ -159,14 +161,8 @@ if __name__== "__main__" :
 	##################################################
 	email_bodies = parsed_df.Body
 	print('Max sentence length: ', max([len(email_body) for email_body in email_bodies]))
+	print('Avg sentence length: ', mean([len(email_body) for email_body in email_bodies]))
 	sorted_email_bodies = sorted(email_bodies, key=len)
-	print(len(sorted_email_bodies))
+	print("Total examples:", len(sorted_email_bodies))
 	print("A sample email:\n")
-	print(sorted_email_bodies[800][:])
-
-
-	# for body in parsed_df.Body.sample(10):
-	# 	print(type(body))
-	# 	if len(body.split()) > 512:
-	# 		body = ''.join(body.split()[:511])
-
+	print(sorted_email_bodies[-1][:])
