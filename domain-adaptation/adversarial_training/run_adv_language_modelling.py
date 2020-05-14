@@ -86,8 +86,8 @@ class Discriminator(nn.Module):
     def __init__(self, config):
         super(Discriminator, self).__init__()
         self.config = config
-        self.inter_hidden_size = 256
-        self.num_domains =  2                
+        self.inter_hidden_size = 128
+        self.num_domains =  2
         self.main = nn.Sequential(
             nn.Linear(self.config.hidden_size, self.inter_hidden_size),
             nn.Linear(self.inter_hidden_size, self.num_domains-1),
@@ -186,8 +186,8 @@ class BertForAdversarialMaskedLM(BertForMaskedLM):
 
         # loss for the discriminator:
         if domain_labels is not None:
-            print(discriminator_op)
-            print(domain_labels)
+            # print(discriminator_op)
+            # print(domain_labels)
             dis_loss = adv_loss_fct(discriminator_op.view(-1), domain_labels.view(-1))
             outputs = (dis_loss, ) + outputs
 
@@ -304,28 +304,25 @@ class TsvAdvTextDataset(Dataset):
         data = []
         domain = []
         self.examples = []
-        for i, file_path in enumerate(filepaths):
-            assert os.path.isfile(file_path)
+        for i, filepath in enumerate(filepaths):
+            # print(filepath)
+            assert os.path.isfile(filepath)
             # Here, we do not cache the features, operating under the assumption
             # that we will soon use fast multithreaded tokenizers from the
             # `tokenizers` repo everywhere =)
-            logger.info("Creating features from dataset file at %s", file_path)
+            logger.info("Creating features from dataset file at %s", filepath)
 
-            with open(file_path, encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 # lines = [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
                 # lines = [line for line in re.split(r'\t+', f.read()) if (len(line) > 0 and not line.isspace())]
                 lines_list = pd.read_csv(f, sep='\t').values.tolist()
                 lines = [i for l in lines_list for i in l]
-            print("\nTotal number of examples in this domain:", len(lines))
-            print("A sample:", lines[0])
-
+            logger.info("Total number of examples in this domain: %s", str(len(lines)))
             # self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
             data.append(tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"])
             # data.append(tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size, pad_to_max_length=True)["input_ids"])
             domain.append([float(i)]*len(data[i]))
             self.examples += list(zip(data[i], domain[i]))
-        # print(self.examples[10])
-        # print(self.examples[10000])
 
 
     def __len__(self):
@@ -436,7 +433,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     def collate(examples):
         if tokenizer._pad_token is None:
             return (pad_sequence([d[0] for d in examples], batch_first=True), torch.tensor([d[1] for d in examples]))
-        return pad_sequence([d[0] for d in examples], batch_first=True, padding_value=tokenizer.pad_token_id), torch.tensor([d[1] for d in examples])
+        return (pad_sequence([d[0] for d in examples], batch_first=True, padding_value=tokenizer.pad_token_id), torch.tensor([d[1] for d in examples]))
 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(
@@ -539,6 +536,10 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     logging_loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
     loss = {"mlm":0.0, "enc":0.0, "dis":0.0}
 
+    # for discriminator accuracy
+    total = 0
+    correct = 0
+
     model_to_resize = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
     model_to_resize.resize_token_embeddings(len(tokenizer))
 
@@ -557,34 +558,43 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                 continue
 
             # uncover domain labels:
-            batch = tuple(t.to(args.device) for t in batch)
+            # batch = tuple(t.to(args.device) for t in batch)
             inputs, labels = mask_tokens(batch[0], tokenizer, args) if args.mlm else (batch[0], batch[0])
             # inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
+            domain_labels = batch[1].to(args.device)
             model.train()
             # outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
-            outputs = model(inputs, masked_lm_labels=labels, domain_labels=batch[1]) if args.mlm else model(inputs, 
-                labels=labels, domain_labels=batch[1])
+            outputs = model(inputs, masked_lm_labels=labels, domain_labels=domain_labels) if args.mlm else model(inputs, 
+                labels=labels, domain_labels=domain_labels)
             # loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             loss["mlm"] = outputs[0]
             loss["enc"] = outputs[1]
             loss["dis"] = outputs[2]
-            # if args.n_gpu > 1:
-            #     loss = loss.mean()  # mean() to average on multi-gpu parallel training
-            # if args.gradient_accumulation_steps > 1:
-            #     loss = loss / args.gradient_accumulation_steps
+            _, pred_domain_labels = torch.max(outputs[4].data, 1)
+            total = domain_labels.size(0)
+            correct = (pred_domain_labels == domain_labels).sum().item()
+            for k in loss:
+                # print('\n'+k, loss[k])
+                if args.n_gpu > 1:
+                    loss[k] = loss[k].mean() # mean() to average on multi-gpu parallel training
+                if args.gradient_accumulation_steps > 1:
+                    loss[k] = loss[k] / args.gradient_accumulation_steps
+                if args.fp16:
+                    with amp.scale_loss(loss[k], optimizers[k]) as scaled_loss:
+                        scaled_loss.backward()
+                else: continue
+            loss["dis"].backward()
+            optimizers["dis"].step()
+            loss["enc"].backward(retain_graph=True)
+            loss["mlm"].backward()
+            optimizers["enc"].step()
+            optimizers["dec"].step()
 
-            # if args.fp16:
-            #     with amp.scale_loss(loss, optimizer) as scaled_loss:
-            #         scaled_loss.backward()
-            # else:
-            #     loss.backward()
-            for k in loss: loss[k].backward(retain_graph=True)
 
-
-            for k in loss: tr_loss[k] += loss[k]
+            for k in loss: tr_loss[k] += loss[k].item()
 
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 # if args.fp16:
@@ -592,11 +602,11 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                 # else:
                 #     torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                for k in optimizers:
-                    optimizers[k].step()
-                    scheduler[k].step()  # Update learning rate schedule
-                    model.zero_grad()
-                    global_step += 1
+                for k in schedulers:
+                    # optimizers[k].step()
+                    schedulers[k].step()  # Update learning rate schedule
+                model.zero_grad()
+                global_step += 1
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     # Log metrics
@@ -607,8 +617,12 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
                             wandb.log({key: value})
-                    tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
-                    wandb.log({"learning rate": scheduler.get_lr()[0]})
+                    wandb.log({"dis train acc": correct/total})
+                    total = 0
+                    correct = 0
+                    for k in schedulers:
+                        tb_writer.add_scalar(k+"_lr", schedulers[k].get_lr()[0], global_step)
+                        wandb.log({k+" learning rate": schedulers[k].get_lr()[0]})
 
                     for k in loss:
                         tb_writer.add_scalar(k+"_loss", (tr_loss[k] - logging_loss[k]) / args.logging_steps, global_step)
@@ -661,10 +675,15 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     # Note that DistributedSampler samples randomly
 
-    def collate(examples: List[torch.Tensor]):
+    def collate(examples):
         if tokenizer._pad_token is None:
-            return pad_sequence(examples, batch_first=True)
-        return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
+            return (pad_sequence([d[0] for d in examples], batch_first=True), torch.tensor([d[1] for d in examples]))
+        return (pad_sequence([d[0] for d in examples], batch_first=True, padding_value=tokenizer.pad_token_id), torch.tensor([d[1] for d in examples]))
+
+    #def collate(examples: List[torch.Tensor]):
+    #    if tokenizer._pad_token is None:
+    #        return pad_sequence(examples, batch_first=True)
+    #    return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(
@@ -672,7 +691,7 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     )
 
     # multi-gpu evaluate
-    if args.n_gpu > 1:
+    if args.n_gpu > 1 and not isinstance(model, torch.nn.DataParallel):
         model = torch.nn.DataParallel(model)
 
     # Eval!
@@ -680,24 +699,36 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     eval_loss = 0.0
+    eval_dis_loss = 0.0
     nb_eval_steps = 0
+    total = 0
+    correct = 0
     model.eval()
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
+        inputs, labels = mask_tokens(batch[0], tokenizer, args) if args.mlm else (batch[0], batch[0])
         inputs = inputs.to(args.device)
         labels = labels.to(args.device)
+        domain_labels = batch[1].to(args.device)
 
         with torch.no_grad():
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
-            lm_loss = outputs[0]
-            eval_loss += lm_loss.mean().item()
+            outputs = model(inputs, masked_lm_labels=labels, domain_labels=domain_labels) if args.mlm else model(inputs, labels=labels, domain_labels=domain_labels)
+            mlm_loss = outputs[0]
+            enc_loss = outputs[1]
+            dis_loss = outputs[2]
+            eval_loss += mlm_loss.mean().item()
+            eval_dis_loss += dis_loss.mean().item()
+
+            _, pred_domain_labels = torch.max(outputs[4].data, 1)
+            total += domain_labels.size(0)
+            correct += (pred_domain_labels == domain_labels).sum().item()
         nb_eval_steps += 1
 
     eval_loss = eval_loss / nb_eval_steps
+    eval_dis_loss = eval_dis_loss / nb_eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
 
-    result = {"perplexity": perplexity}
+    result = {"perplexity": perplexity, "dis eval loss":eval_dis_loss, "dis eval acc":100*correct/total}
 
     output_eval_file = os.path.join(eval_output_dir, prefix, "eval_results.txt")
     with open(output_eval_file, "w") as writer:
@@ -896,7 +927,7 @@ def main():
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        device = torch.device("cuda:0" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
